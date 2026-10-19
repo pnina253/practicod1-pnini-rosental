@@ -1,0 +1,319 @@
+﻿// Author: My Name
+
+// File: BundleCommand.cs
+// Path: Commands\BundleCommand.cs
+
+using practicod1_pnini_rosental.Helpers;
+using practicod1_pnini_rosental.Services;
+using System.CommandLine;
+namespace practicod1_pnini_rosental.Commands
+{
+    public class BundleCommand
+    {
+        public static Command Create()
+        {
+            var bundleCommand = new Command("bundle", "Bundle source files");
+            //language
+            var languageOption = new Option<string>("--language")
+            {
+                Description = "The programming language",
+                Required = true
+            };
+            languageOption.Aliases.Add("-l");
+            //output
+            var outputOption = new Option<string>("--output")
+            {
+                Description = "The output file path"
+            };
+            outputOption.Aliases.Add("-o");
+            //note
+            var noteOption = new Option<bool>("--note")
+            { Description = "Adding notes to the file" };
+            noteOption.Aliases.Add("-n");
+            //sort
+            var sortOption = new Option<string>("--sort")
+            {
+                Description = "Sort files by name or language",
+                DefaultValueFactory = _ => "name"
+            };
+            sortOption.AcceptOnlyFromAmong("name", "language");
+            sortOption.Aliases.Add("-s");
+            //remove - empty - lines
+            var removeEmptyLinesOption = new Option<bool>("--remove-empty-lines")
+            { Description = "Removing empty lines" };
+            removeEmptyLinesOption.Aliases.Add("-r");
+            //author
+            var authorOption = new Option<string>("--author")
+            { Description = "author of the bundle" };
+            authorOption.Aliases.Add("-a");
+            bundleCommand.Add(languageOption);
+            bundleCommand.Add(outputOption);
+            bundleCommand.Add(noteOption);
+            bundleCommand.Add(sortOption);
+            bundleCommand.Add(removeEmptyLinesOption);
+            bundleCommand.Add(authorOption);
+            var scanner = new FileScanner();
+            var bundleService = new BundleService();
+            bundleCommand.SetAction(parseResult =>
+            {
+                var language = parseResult.GetValue(languageOption);
+                if (string.IsNullOrWhiteSpace(language))
+                {
+                    Console.WriteLine("A language must be specified.");
+                    return;
+                }
+                var extensions = language.GetLanguage();
+                if (extensions == null)
+                {
+                    Console.WriteLine($"Unsupported language: {language}");
+                    return;
+                }
+                var sourceDirectory = Directory.GetCurrentDirectory();
+                var files = scanner.ScanFiles(sourceDirectory, language!);
+                var outputPath = parseResult.GetValue(outputOption);
+                if (string.IsNullOrWhiteSpace(outputPath))
+                {
+                    outputPath = Path.Combine(sourceDirectory, "bundle.txt");
+                }
+                else if (!Path.IsPathRooted(outputPath))
+                {
+                    outputPath = Path.Combine(sourceDirectory, outputPath);
+                }
+                var sort = parseResult.GetValue(sortOption) ?? "name";
+                var note = parseResult.GetValue(noteOption);
+                var removeEmptyLines = parseResult.GetValue(removeEmptyLinesOption);
+                var author = parseResult.GetValue(authorOption);
+                try
+                {
+                    bundleService.CreateBundle(
+                        files,
+                        outputPath,
+                        sort,
+                        note,
+                        removeEmptyLines,
+                        author,
+                        sourceDirectory);
+                    Console.WriteLine($"Bundle created: {outputPath}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error creating bundle: {ex.Message}");
+                }
+            }); 
+            return bundleCommand;
+        }
+    }
+}
+
+// File: BundleService.cs
+// Path: Services\BundleService.cs
+
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using static System.Net.WebRequestMethods;
+namespace practicod1_pnini_rosental.Services
+{
+    public class BundleService
+    {
+        public void CreateBundle(List<string> files, string outputPath, string sort,
+            bool note,
+            bool removeEmptyLines,
+            string? author, string sourceDirectory)
+        {
+            IEnumerable<string> sortedFiles = files;
+            if (sort.Equals("name", StringComparison.OrdinalIgnoreCase))
+            {
+                sortedFiles = files.OrderBy(
+                    file => Path.GetFileName(file),
+                    StringComparer.OrdinalIgnoreCase);
+            }
+            else if (sort.Equals("language", StringComparison.OrdinalIgnoreCase))
+            {
+                sortedFiles = files
+                    .OrderBy(file => Path.GetExtension(file),
+                        StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(file => Path.GetFileName(file),
+                        StringComparer.OrdinalIgnoreCase);
+            }
+            else
+            {
+                throw new ArgumentException(
+                    "Sort must be 'name' or 'language'.");
+            }
+            string fullOutputPath = Path.GetFullPath(outputPath);
+            string? outputDirectory = Path.GetDirectoryName(fullOutputPath);
+            if (!string.IsNullOrEmpty(outputDirectory))
+            {
+                Directory.CreateDirectory(outputDirectory);
+            }
+            using var writer = new StreamWriter(
+                fullOutputPath, false, Encoding.UTF8);
+            if (!string.IsNullOrWhiteSpace(author))
+            {
+                writer.WriteLine($"// Author: {author}");
+                writer.WriteLine();
+            }
+            foreach (string file in sortedFiles)
+            {
+                if (string.Equals(
+                Path.GetFullPath(file),
+                fullOutputPath,
+                StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                string content = System.IO.File.ReadAllText(file);
+                if (removeEmptyLines)
+                {
+                    content = string.Join(
+                        Environment.NewLine,
+                        content.Split(
+                            new[] { "\r\n", "\n", "\r" },
+                            StringSplitOptions.None)
+                        .Where(line => !string.IsNullOrWhiteSpace(line)));
+                }
+                if (note)
+                {
+                    string fileName = Path.GetFileName(file);
+                    string relativePath = Path.GetRelativePath(
+                        sourceDirectory, file);
+                    writer.WriteLine($"// File: {fileName}");
+                    writer.WriteLine($"// Path: {relativePath}");
+                    writer.WriteLine();
+                }
+                writer.WriteLine(content);
+                writer.WriteLine();
+            }
+        }
+    }
+}
+
+// File: CreateRspCommand.cs
+// Path: Commands\CreateRspCommand.cs
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+namespace practicod1_pnini_rosental.Commands
+{
+    internal class CreateRspCommand
+    {
+    }
+}
+
+// File: FileScanner.cs
+// Path: Services\FileScanner.cs
+
+using practicod1_pnini_rosental.Helpers;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+namespace practicod1_pnini_rosental.Services
+{
+    public class FileScanner
+    {
+        private readonly HashSet<string> excludedDirectories =
+        [
+            "bin",
+            "obj",
+            "debug",
+            "release",
+            ".git"
+        ];
+        public List<string> ScanFiles(string directoryPath, string language)
+        {
+            var extensions = language.GetLanguage();
+            if (extensions == null)
+            {
+                throw new ArgumentException("Unknown programming language.");
+            }
+            var files = new List<string>();
+            ScanDirectory(directoryPath, extensions, files);
+            return files;
+        }
+        private void ScanDirectory(
+            string directoryPath,
+            string[] extensions,
+            List<string> files)
+        {
+            foreach (string file in Directory.EnumerateFiles(directoryPath))
+            {
+                if (extensions.Contains(Path.GetExtension(file),
+                    StringComparer.OrdinalIgnoreCase))
+                {
+                    files.Add(file);
+                }
+            }
+            foreach (string directory in Directory.EnumerateDirectories(directoryPath))
+            {
+                string directoryName = Path.GetFileName(directory);
+                if (excludedDirectories.Contains(directoryName,
+                    StringComparer.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                ScanDirectory(directory, extensions, files);
+            }
+        }
+    }
+}
+
+// File: LanguageExtensions.cs
+// Path: Helpers\LanguageExtensions.cs
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+namespace practicod1_pnini_rosental.Helpers
+{
+    public static class LanguageExtensions
+    {
+        public static string[]? GetLanguage(this string language)
+        {
+            switch (language.ToUpperInvariant())
+            {
+                case "CSHARP":
+                case "C#":
+                    return [".cs"];
+                case "PYTHON":
+                    return [".py"];
+                case "JAVA":
+                    return [".java"];
+                case "JAVASCRIPT":
+                    return [".js"];
+                case "TYPESCRIPT":
+                    return [".ts"];
+                case "C":
+                    return [".c"];
+                case "CPP":
+                    return [".cpp"];
+                case "ALL":
+                    return [".cs", ".py", ".java", ".js", ".ts", ".c", ".cpp"];
+                default:
+                    return null;
+            }
+        }
+    }
+}
+
+// File: Program.cs
+// Path: Program.cs
+
+using practicod1_pnini_rosental.Commands;
+using practicod1_pnini_rosental.Services;
+using System.CommandLine;
+var rootCommand = new RootCommand("CLI tool");
+var createRspCommand = new Command("create-rsp", "Create a response file");
+rootCommand.Add(BundleCommand.Create());
+rootCommand.Add(createRspCommand);
+rootCommand.Parse(args).Invoke();
+
